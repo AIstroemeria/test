@@ -1,0 +1,210 @@
+
+--MySQL5.7.22主从复制搭建步骤：
+
+--建库大概步骤：
+
+--1 创建用户组 及 解压MySQL软件
+bash#> groupadd mysql
+bash#> useradd -r -g mysql -s /bin/false mysql
+bash#> cd /usr/local
+bash#> tar zxvf /path/to/mysql-5.7.22-linux-glibc2.12-x86_64.tar.gz
+bash#> mv full-path-to-mysql-VERSION-OS mysql
+
+
+--2 创建相关的mysql对应目录....
+bash#> cd /data
+bash#> mkdir mysql
+bash#> cd mysql
+bash#> mkdir run tmp logs binlogs data
+bash#> chown -R mysql.mysql /data
+
+--3 编写/etc/my.cnf文件 此处省略，根据不同路径，内存大小 来编辑对应的my.cnf文件。 下面是主库使用的my.cnf文件内容
+[mysql]
+port                            = 3306
+socket                          = /data/mysql/run/mysql.sock
+default-character-set           = utf8
+prompt                          = \\u@\\h:\\d \\r:\\m:\\s >
+ 
+[mysqld] 
+user                            = mysql
+default-storage-engine          = InnoDB
+character-set-server            = utf8
+socket                          = /data/mysql/run/mysql.sock
+pid-file                        = /data/mysql/run/mysql.pid
+binlog_format                   = ROW
+transaction_isolation           = READ-COMMITTED
+max-allowed-packet              = 512M
+max-connections                 = 1000
+max-connect-errors              = 1000000
+skip-name-resolve               = 1
+sysdate-is-now                  = 1
+server-id                       = 1
+datadir                         = /data/mysql/data
+log-bin                         = /data/mysql/binlogs/mysql-bin
+innodb-buffer-pool-size         = 128G
+innodb-flush-method             = O_DIRECT
+innodb-log-files-in-group       = 3
+innodb-log-file-size            = 2G
+log_timestamps                  = SYSTEM
+expire-logs-days                = 15
+log-queries-not-using-indexes   = 1
+slow-query-log                  = 1
+explicit_defaults_for_timestamp = 1
+log-error                       = /data/mysql/logs/mysql_error.log
+slow-query-log-file             = /data/mysql/logs/mysql_slow.log
+tmpdir                          = /data/mysql/tmp
+
+gtid_mode                       = ON
+enforce_gtid_consistency        = 1
+
+# REPLICATION #
+#read-only                       = 1
+skip-slave-start                = 1
+log-slave-updates               = 1
+relay-log                       = /data/mysql/binglogs/relay-bin
+sync-master-info                = 1
+sync-relay-log                  = 1
+sync-relay-log-info             = 1
+
+# 开启MySQL5.7的并行复制功能，减少主从延迟
+slave-parallel-type             = LOGICAL_CLOCK
+slave-parallel-workers          = 4
+relay_log_recovery              = 1
+relay_log_info_repository       = TABLE
+master_info_repository          = TABLE
+
+
+
+
+
+
+--4 初始化mysql
+bash#> bin/mysqld --initialize --user=mysql 
+
+--5 启动mysql
+bash#> bin/mysqld_safe --user=mysql &
+
+--6 创见快捷启动方式
+bash#> cp /usr/local/mysql/support-files/mysql.server /etc/init.d/mysql
+-- 以后启动和关闭MySQL 就可以使用 service mysql start|stop|status 命令来直接操作了。
+[root@localhost mysql]#  service mysql status
+ SUCCESS! MySQL running (3370)
+
+
+
+--7 第一次登陆 需要修改密码
+[root@localhost]# /usr/local/mysql/bin/mysql -uroot -p
+--此时输入初始化的时候系统临时创建的密码（密码在mysql_error.log文件中 /data/mysql/logs/mysql_error.log）来登陆，然后进行密码修改
+mysql> ALTER USER   'root'@'localhost' identified by 'mysql123456';  
+mysql> flush privileges
+mysql> exit
+
+--8 在从库做以上同样的操作，然后这样主从两台一样的数据库就搭建完毕了。
+
+---从此位置往上部分为， MySQL的单实例安装。下面进行对应的主从复制搭建
+
+--9 在主库创建复制用户
+mysql> CREATE USER 'repl'@'10.21.66.%' IDENTIFIED BY 'slavepass';
+mysql> GRANT replication slave,replication client,super,reload ON *.* TO 'repl'@'10.21.66.%';
+mysql> flush privileges
+
+--在 主库操作 查看复制的位置信息
+mysql> show master status;
+
+root@localhost:(none) 02:03:12 >show master status;
++------------------+----------+--------------+------------------+------------------------------------------+
+| File             | Position | Binlog_Do_DB | Binlog_Ignore_DB | Executed_Gtid_Set                        |
++------------------+----------+--------------+------------------+------------------------------------------+
+| mysql-bin.000002 |      1207 |              |                  |                                         |
++------------------+----------+--------------+------------------+------------------------------------------+
+1 row in set (0.00 sec)
+       
+--
+--10 在 从库操作 开启主从复制
+mysql> CHANGE MASTER TO MASTER_HOST='10.21.66.218', MASTER_USER='repl', MASTER_PASSWORD='slavepass', master_auto_position = 1;
+mysql> start slave;
+
+--主从复制配置并启动完毕！
+--11 在slave上 查看复制状态，
+
+mysql>show slave status\G
+*************************** 1. row ***************************
+               Slave_IO_State: Waiting for master to send event
+                  Master_Host: 192.168.1.240
+                  Master_User: repl
+                  Master_Port: 3301
+                Connect_Retry: 60
+              Master_Log_File: binlog57.000006
+          Read_Master_Log_Pos: 462
+               Relay_Log_File: zejin240-relay-bin.000012
+                Relay_Log_Pos: 673
+        Relay_Master_Log_File: binlog57.000006
+             Slave_IO_Running: Yes
+            Slave_SQL_Running: Yes
+              Replicate_Do_DB: 
+          Replicate_Ignore_DB: 
+           Replicate_Do_Table: 
+       Replicate_Ignore_Table: 
+      Replicate_Wild_Do_Table: 
+  Replicate_Wild_Ignore_Table: 
+                   Last_Errno: 0
+                   Last_Error: 
+                 Skip_Counter: 0
+          Exec_Master_Log_Pos: 462
+              Relay_Log_Space: 969
+              Until_Condition: None
+               Until_Log_File: 
+                Until_Log_Pos: 0
+           Master_SSL_Allowed: No
+           Master_SSL_CA_File: 
+           Master_SSL_CA_Path: 
+              Master_SSL_Cert: 
+            Master_SSL_Cipher: 
+               Master_SSL_Key: 
+        Seconds_Behind_Master: 0
+Master_SSL_Verify_Server_Cert: No
+                Last_IO_Errno: 0
+                Last_IO_Error: 
+               Last_SQL_Errno: 0
+               Last_SQL_Error: 
+  Replicate_Ignore_Server_Ids: 
+             Master_Server_Id: 3301
+                  Master_UUID: a97983fc-5a29-11e6-9d28-000c29d4dc3f
+             Master_Info_File: /home/mysql/I3302/master.info
+                    SQL_Delay: 0
+          SQL_Remaining_Delay: NULL
+      Slave_SQL_Running_State: Slave has read all relay log; waiting for more updates
+           Master_Retry_Count: 86400
+                  Master_Bind: 
+      Last_IO_Error_Timestamp: 
+     Last_SQL_Error_Timestamp: 
+               Master_SSL_Crl: 
+           Master_SSL_Crlpath: 
+           Retrieved_Gtid_Set: a97983fc-5a29-11e6-9d28-000c29d4dc3f:1-2
+            Executed_Gtid_Set: a97983fc-5a29-11e6-9d28-000c29d4dc3f:1-2
+                Auto_Position: 0
+         Replicate_Rewrite_DB: 
+                 Channel_Name: 
+           Master_TLS_Version: 
+1 row in set (0.00 sec)
+
+ 
+至此完成MySQL主从复制的搭建工作。
+
+注意点：
+1 MySQL环境变量的修改  vi /etc/profile  加入 export PATH=$PATH:/usr/local/mysql/bin 即可
+2 操作系统加载磁盘的时候，需要存放数据的MySQL磁盘（/data目录）格式化成XFS文件系统，XFS文件系统对MySQL数据库的性能最好。
+3 在格式化磁盘的时候redhat6.7不支持xfs 需要安装一个rpm包后才可以正常格式化（xfsprogs-3.1.1-20.el6.x86_64.rpm）,主库从库上都需要这个包，安装后才可以正常的格式化对应MySQL数据存放的磁盘。
+  mkfs.xfs -f /dev/sdb1 
+  mkdir /data
+  mount -t xfs -o defaults,noatime,nodiratime /dev/sdb1 /data
+  /etc/fstab文件中加入下面信息
+   /dev/sdb1             /data                   xfs    defaults,noatime,nodiratime    1 2 
+
+
+
+
+
+
+
+

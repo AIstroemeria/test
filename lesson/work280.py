@@ -1,0 +1,7 @@
+f = open("E:\\OpenMe.mp3")
+temp = f.read()
+print(temp)
+f.close()
+f = open("OpenMe.txt",'w')
+f.write(temp)
+f.close()
